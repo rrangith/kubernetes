@@ -17,16 +17,24 @@ limitations under the License.
 package kuberuntime
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	runtimetesting "k8s.io/cri-api/pkg/apis/testing"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 )
+
+type podStatusProviderFunc func(uid types.UID, name, namespace string) (*kubecontainer.PodStatus, error)
+
+func (f podStatusProviderFunc) GetPodStatus(_ context.Context, uid types.UID, name, namespace string) (*kubecontainer.PodStatus, error) {
+	return f(uid, name, namespace)
+}
 
 func TestIsInitContainerFailed(t *testing.T) {
 	tests := []struct {
@@ -210,10 +218,11 @@ func TestGetImageUser(t *testing.T) {
 
 	i.SetFakeImages([]string{"test-image-ref1", "test-image-ref2", "test-image-ref3"})
 	for j, test := range tests {
+		ctx := context.Background()
 		i.Images[test.originalImage.name].Username = test.originalImage.username
 		i.Images[test.originalImage.name].Uid = test.originalImage.uid
 
-		uid, username, err := m.getImageUser(test.originalImage.name)
+		uid, username, err := m.getImageUser(ctx, test.originalImage.name)
 		assert.NoError(t, err, "TestCase[%d]", j)
 
 		if test.expectedImageUserValues.uid == (*int64)(nil) {

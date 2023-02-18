@@ -254,7 +254,7 @@ func handleInternal(storage map[string]rest.Storage, admissionControl admission.
 		group.GroupVersion = grouplessGroupVersion
 		group.OptionsExternalVersion = &grouplessGroupVersion
 		group.Serializer = codecs
-		if _, err := (&group).InstallREST(container); err != nil {
+		if _, _, err := (&group).InstallREST(container); err != nil {
 			panic(fmt.Sprintf("unable to install container %s: %v", group.GroupVersion, err))
 		}
 	}
@@ -266,7 +266,7 @@ func handleInternal(storage map[string]rest.Storage, admissionControl admission.
 		group.GroupVersion = testGroupVersion
 		group.OptionsExternalVersion = &testGroupVersion
 		group.Serializer = codecs
-		if _, err := (&group).InstallREST(container); err != nil {
+		if _, _, err := (&group).InstallREST(container); err != nil {
 			panic(fmt.Sprintf("unable to install container %s: %v", group.GroupVersion, err))
 		}
 	}
@@ -278,7 +278,7 @@ func handleInternal(storage map[string]rest.Storage, admissionControl admission.
 		group.GroupVersion = newGroupVersion
 		group.OptionsExternalVersion = &newGroupVersion
 		group.Serializer = codecs
-		if _, err := (&group).InstallREST(container); err != nil {
+		if _, _, err := (&group).InstallREST(container); err != nil {
 			panic(fmt.Sprintf("unable to install container %s: %v", group.GroupVersion, err))
 		}
 	}
@@ -290,6 +290,7 @@ func handleInternal(storage map[string]rest.Storage, admissionControl admission.
 	handler := genericapifilters.WithAudit(mux, auditSink, fakeRuleEvaluator, longRunningCheck)
 	handler = genericapifilters.WithRequestDeadline(handler, auditSink, fakeRuleEvaluator, longRunningCheck, codecs, 60*time.Second)
 	handler = genericapifilters.WithRequestInfo(handler, testRequestInfoResolver())
+	handler = genericapifilters.WithAuditInit(handler)
 
 	return &defaultAPIServer{handler, container}
 }
@@ -369,6 +370,10 @@ func (storage *SimpleRESTStorage) NamespaceScoped() bool {
 
 func (storage *SimpleRESTStorage) ConvertToTable(ctx context.Context, obj runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
 	return rest.NewDefaultTableConvertor(schema.GroupResource{Resource: "simple"}).ConvertToTable(ctx, obj, tableOptions)
+}
+
+func (storate *SimpleRESTStorage) GetSingularName() string {
+	return "simple"
 }
 
 func (storage *SimpleRESTStorage) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
@@ -574,6 +579,10 @@ func (s *ConnecterRESTStorage) NewConnectOptions() (runtime.Object, bool, string
 	return s.emptyConnectOptions, false, ""
 }
 
+func (s *ConnecterRESTStorage) GetSingularName() string {
+	return "simple"
+}
+
 type MetadataRESTStorage struct {
 	*SimpleRESTStorage
 	types []string
@@ -616,6 +625,10 @@ type GetWithOptionsRootRESTStorage struct {
 	*SimpleTypedStorage
 	optionsReceived runtime.Object
 	takesPath       string
+}
+
+func (r *GetWithOptionsRootRESTStorage) GetSingularName() string {
+	return "simple"
 }
 
 func (r *GetWithOptionsRootRESTStorage) NamespaceScoped() bool {
@@ -684,6 +697,10 @@ func (storage *SimpleTypedStorage) Get(ctx context.Context, id string, options *
 
 func (storage *SimpleTypedStorage) checkContext(ctx context.Context) {
 	storage.actualNamespace, storage.namespacePresent = request.NamespaceFrom(ctx)
+}
+
+func (storage *SimpleTypedStorage) GetSingularName() string {
+	return "simple"
 }
 
 func bodyOrDie(response *http.Response) string {
@@ -820,6 +837,10 @@ func (UnimplementedRESTStorage) New() runtime.Object {
 }
 
 func (UnimplementedRESTStorage) Destroy() {
+}
+
+func (UnimplementedRESTStorage) GetSingularName() string {
+	return ""
 }
 
 // TestUnimplementedRESTStorage ensures that if a rest.Storage does not implement a given
@@ -3310,7 +3331,7 @@ func TestParentResourceIsRequired(t *testing.T) {
 		ParameterCodec: parameterCodec,
 	}
 	container := restful.NewContainer()
-	if _, err := group.InstallREST(container); err == nil {
+	if _, _, err := group.InstallREST(container); err == nil {
 		t.Fatal("expected error")
 	}
 
@@ -3342,7 +3363,7 @@ func TestParentResourceIsRequired(t *testing.T) {
 		ParameterCodec: parameterCodec,
 	}
 	container = restful.NewContainer()
-	if _, err := group.InstallREST(container); err != nil {
+	if _, _, err := group.InstallREST(container); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3820,7 +3841,7 @@ func (obj *UnregisteredAPIObject) DeepCopyObject() runtime.Object {
 
 func TestWriteJSONDecodeError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		responsewriters.WriteObjectNegotiated(codecs, negotiation.DefaultEndpointRestrictions, newGroupVersion, w, req, http.StatusOK, &UnregisteredAPIObject{"Undecodable"})
+		responsewriters.WriteObjectNegotiated(codecs, negotiation.DefaultEndpointRestrictions, newGroupVersion, w, req, http.StatusOK, &UnregisteredAPIObject{"Undecodable"}, false)
 	}))
 	defer server.Close()
 	// Decode error response behavior is dictated by
@@ -4288,6 +4309,10 @@ func (storage *SimpleXGSubresourceRESTStorage) GroupVersionKind(containingGV sch
 	return storage.itemGVK
 }
 
+func (storage *SimpleXGSubresourceRESTStorage) GetSingularName() string {
+	return "simple"
+}
+
 func TestXGSubresource(t *testing.T) {
 	container := restful.NewContainer()
 	container.Router(restful.CurlyRouter{})
@@ -4327,7 +4352,7 @@ func TestXGSubresource(t *testing.T) {
 		Serializer:             codecs,
 	}
 
-	if _, err := (&group).InstallREST(container); err != nil {
+	if _, _, err := (&group).InstallREST(container); err != nil {
 		panic(fmt.Sprintf("unable to install container %s: %v", group.GroupVersion, err))
 	}
 

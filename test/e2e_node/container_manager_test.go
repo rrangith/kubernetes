@@ -20,12 +20,16 @@ limitations under the License.
 package e2enode
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	testutils "k8s.io/kubernetes/test/utils"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -34,7 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 
@@ -81,25 +84,25 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
 	ginkgo.Describe("Validate OOM score adjustments [NodeFeature:OOMScoreAdj]", func() {
 		ginkgo.Context("once the node is setup", func() {
-			ginkgo.It("container runtime's oom-score-adj should be -999", func() {
+			ginkgo.It("container runtime's oom-score-adj should be -999", func(ctx context.Context) {
 				runtimePids, err := getPidsForProcess(framework.TestContext.ContainerRuntimeProcessName, framework.TestContext.ContainerRuntimePidFile)
 				framework.ExpectNoError(err, "failed to get list of container runtime pids")
 				for _, pid := range runtimePids {
-					gomega.Eventually(func() error {
+					gomega.Eventually(ctx, func() error {
 						return validateOOMScoreAdjSetting(pid, -999)
 					}, 5*time.Minute, 30*time.Second).Should(gomega.BeNil())
 				}
 			})
-			ginkgo.It("Kubelet's oom-score-adj should be -999", func() {
+			ginkgo.It("Kubelet's oom-score-adj should be -999", func(ctx context.Context) {
 				kubeletPids, err := getPidsForProcess(kubeletProcessName, "")
 				framework.ExpectNoError(err, "failed to get list of kubelet pids")
 				framework.ExpectEqual(len(kubeletPids), 1, "expected only one kubelet process; found %d", len(kubeletPids))
-				gomega.Eventually(func() error {
+				gomega.Eventually(ctx, func() error {
 					return validateOOMScoreAdjSetting(kubeletPids[0], -999)
 				}, 5*time.Minute, 30*time.Second).Should(gomega.BeNil())
 			})
 			ginkgo.Context("", func() {
-				ginkgo.It("pod infra containers oom-score-adj should be -998 and best effort container's should be 1000", func() {
+				ginkgo.It("pod infra containers oom-score-adj should be -998 and best effort container's should be 1000", func(ctx context.Context) {
 					// Take a snapshot of existing pause processes. These were
 					// created before this test, and may not be infra
 					// containers. They should be excluded from the test.
@@ -109,7 +112,7 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 
 					podClient := e2epod.NewPodClient(f)
 					podName := "besteffort" + string(uuid.NewUUID())
-					podClient.Create(&v1.Pod{
+					podClient.Create(ctx, &v1.Pod{
 						ObjectMeta: metav1.ObjectMeta{
 							Name: podName,
 						},
@@ -125,7 +128,7 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 
 					var pausePids []int
 					ginkgo.By("checking infra container's oom-score-adj")
-					gomega.Eventually(func() error {
+					gomega.Eventually(ctx, func() error {
 						pausePids, err = getPidsForProcess("pause", "")
 						if err != nil {
 							return fmt.Errorf("failed to get list of pause pids: %v", err)
@@ -143,7 +146,7 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 					}, 2*time.Minute, time.Second*4).Should(gomega.BeNil())
 					var shPids []int
 					ginkgo.By("checking besteffort container's oom-score-adj")
-					gomega.Eventually(func() error {
+					gomega.Eventually(ctx, func() error {
 						shPids, err = getPidsForProcess("agnhost", "")
 						if err != nil {
 							return fmt.Errorf("failed to get list of serve hostname process pids: %v", err)
@@ -160,7 +163,7 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 						ginkgo.By("Dump all running containers")
 						runtime, _, err := getCRIClient()
 						framework.ExpectNoError(err)
-						containers, err := runtime.ListContainers(&runtimeapi.ContainerFilter{
+						containers, err := runtime.ListContainers(context.Background(), &runtimeapi.ContainerFilter{
 							State: &runtimeapi.ContainerStateValue{
 								State: runtimeapi.ContainerState_CONTAINER_RUNNING,
 							},
@@ -173,10 +176,10 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 					}
 				})
 			})
-			ginkgo.It("guaranteed container's oom-score-adj should be -998", func() {
+			ginkgo.It("guaranteed container's oom-score-adj should be -998", func(ctx context.Context) {
 				podClient := e2epod.NewPodClient(f)
 				podName := "guaranteed" + string(uuid.NewUUID())
-				podClient.Create(&v1.Pod{
+				podClient.Create(ctx, &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: podName,
 					},
@@ -195,11 +198,14 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 						},
 					},
 				})
+				if err := e2epod.WaitForPodCondition(ctx, f.ClientSet, f.Namespace.Name, podName, "Ready", 120*time.Second, testutils.PodRunningReady); err != nil {
+					framework.ExpectNoError(err, fmt.Sprintf("Pod %v could not enter running/ready", podName))
+				}
 				var (
 					ngPids []int
 					err    error
 				)
-				gomega.Eventually(func() error {
+				gomega.Eventually(ctx, func() error {
 					ngPids, err = getPidsForProcess("nginx", "")
 					if err != nil {
 						return fmt.Errorf("failed to get list of nginx process pids: %v", err)
@@ -211,13 +217,13 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 					}
 
 					return nil
-				}, 2*time.Minute, time.Second*4).Should(gomega.BeNil())
+				}, 30*time.Second, time.Second*4).Should(gomega.BeNil())
 
 			})
-			ginkgo.It("burstable container's oom-score-adj should be between [2, 1000)", func() {
+			ginkgo.It("burstable container's oom-score-adj should be between [2, 1000)", func(ctx context.Context) {
 				podClient := e2epod.NewPodClient(f)
 				podName := "burstable" + string(uuid.NewUUID())
-				podClient.Create(&v1.Pod{
+				podClient.Create(ctx, &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: podName,
 					},
@@ -237,11 +243,14 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 						},
 					},
 				})
+				if err := e2epod.WaitForPodCondition(ctx, f.ClientSet, f.Namespace.Name, podName, "Ready", 120*time.Second, testutils.PodRunningReady); err != nil {
+					framework.ExpectNoError(err, fmt.Sprintf("Pod %v could not enter running/ready", podName))
+				}
 				var (
 					wsPids []int
 					err    error
 				)
-				gomega.Eventually(func() error {
+				gomega.Eventually(ctx, func() error {
 					wsPids, err = getPidsForProcess("agnhost", "")
 					if err != nil {
 						return fmt.Errorf("failed to get list of test-webserver process pids: %v", err)
@@ -252,7 +261,7 @@ var _ = SIGDescribe("Container Manager Misc [Serial]", func() {
 						}
 					}
 					return nil
-				}, 2*time.Minute, time.Second*4).Should(gomega.BeNil())
+				}, 30*time.Second, time.Second*4).Should(gomega.BeNil())
 
 				// TODO: Test the oom-score-adj logic for burstable more accurately.
 			})

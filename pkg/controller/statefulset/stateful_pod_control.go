@@ -241,6 +241,7 @@ func (spc *StatefulPodControl) UpdatePodClaimForRetentionPolicy(set *apps.Statef
 			return fmt.Errorf("Could not retrieve claim %s not found for %s when checking PVC deletion policy: %w", claimName, pod.Name, err)
 		default:
 			if !claimOwnerMatchesSetAndPod(claim, set, pod) {
+				claim = claim.DeepCopy() // Make a copy so we don't mutate the shared cache.
 				needsUpdate := updateClaimOwnerRefForSetAndPod(claim, set, pod)
 				if needsUpdate {
 					err := spc.objectMgr.UpdateClaim(claim)
@@ -312,6 +313,22 @@ func (spc *StatefulPodControl) recordClaimEvent(verb string, set *apps.StatefulS
 			strings.ToLower(verb), claim.Name, pod.Name, set.Name, err)
 		spc.recorder.Event(set, v1.EventTypeWarning, reason, message)
 	}
+}
+
+// createMissingPersistentVolumeClaims creates all of the required PersistentVolumeClaims for pod, and updates its retention policy
+func (spc *StatefulPodControl) createMissingPersistentVolumeClaims(set *apps.StatefulSet, pod *v1.Pod) error {
+	if err := spc.createPersistentVolumeClaims(set, pod); err != nil {
+		return err
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.StatefulSetAutoDeletePVC) {
+		// Set PVC policy as much as is possible at this point.
+		if err := spc.UpdatePodClaimForRetentionPolicy(set, pod); err != nil {
+			spc.recordPodEvent("update", set, pod, err)
+			return err
+		}
+	}
+	return nil
 }
 
 // createPersistentVolumeClaims creates all of the required PersistentVolumeClaims for pod, which must be a member of
